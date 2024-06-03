@@ -23,14 +23,14 @@ Required column names: pid, trial, iv1 (day), iv2 (learning condition), conditio
 ```{r create-fake-data, echo=T}
 set.seed(1276)
 
-N_sub = 30     # number of subjects
+N_sub = 30    # number of subjects
 N_day = 5     # number of days
 N_train = 4   # number of training conditions per subject
 Tr_pCond = 40 # trials per condition
 N_total = N_sub*N_day*N_train*Tr_pCond
 
 data <- tibble(
-  pid   = rep(1:N_sub,each=N_day*N_train*Tr_pCond),
+  pid   = rep(1:N_sub,each=N_day*N_train*Tr_pCond),          # participant ID
   iv1   = rep(rep(1:N_day, each=N_train*Tr_pCond), N_sub),   # 5 days
   trial = rep(1:(N_day*N_train*Tr_pCond),N_sub),             #  trial per subject
   iv2  =   rep(rep(1:N_train, each=Tr_pCond),N_sub*N_day),   # 4 training conditions
@@ -49,7 +49,7 @@ data %>% ggplot(aes(x=RT)) +
   facet_wrap(~pid)
 ```
 
-Nest data within subjects.
+Nest data within participants.
 
 ```{r nest-subjects}
 data_nested <- data %>% group_nest(pid)
@@ -217,7 +217,7 @@ p1/p2/p3
 }
 ```
 
-Apply the functions using map and map2 to create the life tables and plots.
+Apply the functions using map and map2 to create the life tables and plots, for each simulated participant.
 
 ```{r apply-functions}
 data_final <- data_nested %>% 
@@ -246,7 +246,7 @@ pluck(data_final,7,1) %>% filter(condition==20)
 pluck(data_final,8,1)
 ```
 
-Extract file for modeling hazard.
+Extract and save person-trial-bin (ptb) data set for modeling hazard.
 
 ```{r file-hazard-modeling}
 input_modeling_hazard_sim_knot <- data_final %>% 
