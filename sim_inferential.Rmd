@@ -1,0 +1,758 @@
+---
+title: "sim_inferential"
+author: "sven panis"
+date: "2024-06-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In sim_inferential.Rmd we fit Bayesian hazard models to the simulated (person-trial-bin) data set, and calculate the effects of interest, as part of our (pre)registration on the OSF.
+
+Load the libraries.
+
+```{r load-pkg}
+pkg <- c("cmdstanr", "standist", "tidyverse", "RColorBrewer", "patchwork", 
+         "brms", "tidybayes", "bayesplot", "future", "parallel")
+
+lapply(pkg, library, character.only = TRUE)
+```
+
+Set options.
+
+```{r set-options}
+options(brms.backend = "cmdstanr",
+        mc.cores = parallel::detectCores(),
+        future.fork.enable = TRUE,
+        future.rng.onMisuse = "ignore") ## automatically set in RStudio
+
+supportsMulticore()
+
+detectCores()
+
+#check info if needed:
+#packageVersion("cmdstanr")
+#devtools::session_info("rstan")
+```
+
+Prepare data.
+
+```{r}
+# read data
+data_sim_knot <- read_csv("data/inputfile_hazard_modeling_sim_knot.csv")
+head(data_sim_knot)
+
+# change column names
+names(data_sim_knot) <- c("pid","trial","day","training","condition","period","event")
+summary(data_sim_knot) # 30 pid, 800 trials per pid, 5 days, 4 training, 20 conditions, 15 periods: 268,309 rows
+
+# center continous predictors
+data_sim_knot <- data_sim_knot %>% 
+  mutate(day_c = day - 5,  # center on day 5
+         period_11 = period - 11) # center within-trial TIME on bin (1000,1100]
+
+print(data_sim_knot,n=30)
+
+# delete early bins with few responses
+data_sim_knot <- data_sim_knot %>% filter(period > 7) 
+
+# create dummies for levels of training
+data_sim_knot <- data_sim_knot %>% 
+  mutate(Na = ifelse(training==2,1,0),
+         Ty = ifelse(training==3,1,0),
+         NaTy = ifelse(training==4,1,0))
+
+summary(data_sim_knot) # 30 pid, 800 trials per pid, 5 days, 4 training, 20 conditions, 8 periods: 100,624 rows
+
+# remove unnecessary columns
+data_sim_knot <- data_sim_knot %>% select(-c(trial, day, training, condition, period))
+head(data_sim_knot)
+
+# remove some subjects
+data_sim_knot <- data_sim_knot %>% filter(pid < 8) # 22412 rows left
+```
+
+Fit a Bayesian hazard model, to test how the effect of three types of training (naming, tying, naming+tying) play out concurrently on the within-trial and across-day time scales.
+
+```{r}
+priors <- c(
+  set_prior("normal(0, 1)", class = "b"), # for beta parameters 
+  set_prior("student_t(7.61, 0, 1.57)", class = "b", coef = "Intercept"), # flat prior for intercept on hazard scale
+  set_prior("normal(0, 1)", class = "sd"),
+  set_prior("lkj(2)", class = "cor")
+)
+```
+
+```{r}
+plan(multicore)
+
+model_sim_knot2 <-
+   brm(data = data_sim_knot,
+       family = binomial(link="cloglog"),
+       event | trials(1) ~ 0 + Intercept + period_11 + I(period_11^2) + #I(period_11^3) + 
+                              # interactions between training and time
+                              Na + Na*period_11 + Na*I(period_11^2) + #Na*I(period_11^3) + 
+                              Ty + Ty*period_11 + Ty*I(period_11^2) + #Ty*I(period_11^3) + 
+                              NaTy + NaTy*period_11 + NaTy*I(period_11^2) + #NaTy*I(period_11^3) + 
+                              # quadratic effect of day, interacting with linear and quadratic time
+                              day_c + day_c*period_11 + day_c*I(period_11^2) + 
+                              I(day_c^2) + I(day_c^2)*period_11 + I(day_c^2)*I(period_11^2) + 
+                              # interactions between training, time, and day
+                              Na*day_c      + Na*day_c*period_11      + Na*day_c*I(period_11^2) + 
+                              Na*I(day_c^2) + Na*I(day_c^2)*period_11 + Na*I(day_c^2)*I(period_11^2) + 
+                              Ty*day_c      + Ty*day_c*period_11      + Ty*day_c*I(period_11^2) + 
+                              Ty*I(day_c^2) + Ty*I(day_c^2)*period_11 + Ty*I(day_c^2)*I(period_11^2) + 
+                              NaTy*day_c    + NaTy*day_c*period_11    + NaTy*day_c*I(period_11^2) + 
+                              NaTy*I(day_c^2) + NaTy*I(day_c^2)*period_11 + NaTy*I(day_c^2)*I(period_11^2) +  
+    
+                              (1 + period_11  + I(period_11^2) +  #I(period_11^3) + 
+                              Na + Na*period_11 + Na*I(period_11^2) + #Na*I(period_11^3) + 
+                              Ty + Ty*period_11 + Ty*I(period_11^2) + #Ty*I(period_11^3) + 
+                              NaTy + NaTy*period_11 + NaTy*I(period_11^2) + #NaTy*I(period_11^3)  
+                              
+                              day_c + day_c*period_11 + day_c*I(period_11^2) + 
+                              I(day_c^2) + I(day_c^2)*period_11 + I(day_c^2)*I(period_11^2) + 
+                              Na*day_c + Na*day_c*period_11 + Na*day_c*I(period_11^2) + 
+                              Na*I(day_c^2) + Na*I(day_c^2)*period_11 + Na*I(day_c^2)*I(period_11^2) + 
+                              Ty*day_c + Ty*day_c*period_11 + Ty*day_c*I(period_11^2) + 
+                              Ty*I(day_c^2) + Ty*I(day_c^2)*period_11 + Ty*I(day_c^2)*I(period_11^2) + 
+                              NaTy*day_c + NaTy*day_c*period_11 + NaTy*day_c*I(period_11^2) + 
+                              NaTy*I(day_c^2) + NaTy*I(day_c^2)*period_11 + NaTy*I(day_c^2)*I(period_11^2) | pid),
+       prior = priors,
+       chains = 1, cores = 8, iter = 2000, warmup = 1000,
+       control = list(adapt_delta = 0.999, step_size = 0.04, max_treedepth = 12),
+       seed = 12, init = "0",
+       file = "models/model_sim_knot2")
+```
+
+```{r}
+model_sim_knot <- readRDS("models/model_sim_knot.rds")
+summary(model_sim_knot)
+effects_knot <- get_variables(model_sim_knot) 
+fixed_effects_knot <- fixef(model_sim_knot)
+random_effects_knot <- ranef(model_sim_knot)
+```
+
+model_sim_knot (no cubic, 7 subjects, 1000 iter, 500 warmup, about 4 hours): no warnings, but some Rhat = 1.01, 1Rhat = 1.02,1 Rhat = 1.03
+
+# Test alternative model specification:
+
+```{r}
+# create factor of training condition with no training as reference level
+# read data
+data_sim_knot <- read_csv("data/inputfile_hazard_modeling_sim_knot.csv")
+head(data_sim_knot)
+
+# change column names
+names(data_sim_knot) <- c("pid","trial","day","training","condition","period","event")
+summary(data_sim_knot) # 30 pid, 800 trials per pid, 5 days, 4 training, 20 conditions, 15 periods: 268,309 rows
+
+# center continous predictors
+data_sim_knot <- data_sim_knot %>% 
+  mutate(day_c = day - 5,  # center on day 5
+         period_11 = period - 11) # center TIME on bin (1000,1100]
+
+print(data_sim_knot,n=30)
+
+# delete early bins with few responses
+data_sim_knot <- data_sim_knot %>% filter(period > 7) 
+summary(data_sim_knot) # 30 pid, 800 trials per pid, 5 days, 4 training, 20 conditions, 8 periods: 100,624 rows
+
+# create factor training
+data_sim_knot <- data_sim_knot %>% 
+  mutate(train_factor = factor(training, levels=c(1:4),labels=c("notr","na","ty","naty")))
+summary(data_sim_knot)
+data_sim_knot$train_factor
+
+# remove unnecessary columns
+data_sim_knot <- data_sim_knot %>% select(-c(trial, day, training, condition, period))
+head(data_sim_knot)
+
+# remove some subjects
+data_sim_knot <- data_sim_knot %>% filter(pid < 8) # 22412 rows left
+summary(data_sim_knot)
+```
+
+Fit model with alternative specification
+
+```{r}
+plan(multicore)
+
+model_sim_knot_alt <-
+   brm(data = data_sim_knot,
+       family = binomial(link="cloglog"),
+       event | trials(1) ~ 0 + Intercept + 
+                           train_factor*period_11*day_c +
+                           train_factor*I(period_11^2)*day_c +
+                           train_factor*period_11*I(day_c^2) +
+                           train_factor*I(period_11^2)*I(day_c^2) +
+                           (1 + train_factor*period_11*day_c +
+                           train_factor*I(period_11^2)*day_c +
+                           train_factor*period_11*I(day_c^2) +
+                           train_factor*I(period_11^2)*I(day_c^2)  | pid),
+       prior = priors,
+       chains = 1, cores = 8, iter = 1000, warmup = 500,
+       control = list(adapt_delta = 0.999, step_size = 0.04, max_treedepth = 12),
+       seed = 12, init = "0",
+       file = "models/model_sim_knot_alt")
+```
+
+```{r}
+model_sim_knot_alt <- readRDS("models/model_sim_knot_alt.rds")
+summary(model_sim_knot_alt)
+effects_alt <- get_variables(model_sim_knot_alt) 
+fixed_effects_alt <- fixef(model_sim_knot_alt)
+random_effects_alt <- ranef(model_sim_knot_alt)
+```
+
+# Extract posterior distributions, and visualize the effect of training type (vs. no training) for each combination of within-trial time period and day.
+
+Plot using stat_lineribbon().
+
+```{r}
+post <-as_draws_df(model_sim_knot) %>% # 500 x 956
+   select(starts_with("b_")) %>%       # 500 x 36
+   expand_grid(period_11 = -3:4) %>%   # 4000 x 37
+   mutate(period_11sq = period_11^2)   # 4000 x 38
+
+p1 <- post %>% 
+  mutate(postdistr = b_Na + period_11 * `b_period_11:Na` + period_11sq * `b_Iperiod_11E2:Na`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(title = "Day 5", x = "time bin", y = "effect of N") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+p2 <- post %>% 
+  mutate(postdistr = b_Ty + period_11 * `b_period_11:Ty` + period_11sq * `b_Iperiod_11E2:Ty`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(x = "time bin", y = "effect of T") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+p3 <- post %>% 
+  mutate(postdistr = b_NaTy + period_11 * `b_period_11:NaTy` + period_11sq * `b_Iperiod_11E2:NaTy`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(x = "time bin", y = "effect of N+T") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+# effects on day 4
+p4 <- post %>% 
+  mutate(day = -1,
+         day_sq = day^2,
+         postdistr = b_Na + period_11 * `b_period_11:Na` + period_11sq * `b_Iperiod_11E2:Na` + 
+                     day * `b_Na:day_c`  +  day_sq * `b_Na:Iday_cE2` +  
+                     period_11*day*`b_period_11:Na:day_c`  + period_11sq*day*`b_Iperiod_11E2:Na:day_c` + 
+                     period_11*day_sq*`b_period_11:Na:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Na:Iday_cE2`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(title="Day 4", x = "time bin", y = "effect of N") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+p5 <- post %>% 
+  mutate(day = -1,
+         day_sq = day^2,
+         postdistr = b_Ty + period_11 * `b_period_11:Ty` + period_11sq * `b_Iperiod_11E2:Ty` + 
+                     day * `b_Ty:day_c`  +  day_sq * `b_Ty:Iday_cE2` +  
+                     period_11*day*`b_period_11:Ty:day_c`  + period_11sq*day*`b_Iperiod_11E2:Ty:day_c` + 
+                     period_11*day_sq*`b_period_11:Ty:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Ty:Iday_cE2`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(x = "time bin", y = "effect of T") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+p6 <- post %>% 
+  mutate(day = -1,
+         day_sq = day^2,
+         postdistr = b_NaTy + period_11 * `b_period_11:NaTy` + period_11sq * `b_Iperiod_11E2:NaTy` + 
+                     day * `b_NaTy:day_c`  +  day_sq * `b_NaTy:Iday_cE2` +  
+                     period_11*day*`b_period_11:NaTy:day_c`  + period_11sq*day*`b_Iperiod_11E2:NaTy:day_c` + 
+                     period_11*day_sq*`b_period_11:NaTy:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:NaTy:Iday_cE2`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(x = "time bin", y = "effect of N+T") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+
+# effects on day 3
+p7 <- post %>% 
+  mutate(day = -2,
+         day_sq = day^2,
+         postdistr = b_Na + period_11 * `b_period_11:Na` + period_11sq * `b_Iperiod_11E2:Na` + 
+                     day * `b_Na:day_c`  +  day_sq * `b_Na:Iday_cE2` +  
+                     period_11*day*`b_period_11:Na:day_c`  + period_11sq*day*`b_Iperiod_11E2:Na:day_c` + 
+                     period_11*day_sq*`b_period_11:Na:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Na:Iday_cE2`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(title="Day 3", x = "time bin", y = "effect of N") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+p8 <- post %>% 
+  mutate(day = -2,
+         day_sq = day^2,
+         postdistr = b_Ty + period_11 * `b_period_11:Ty` + period_11sq * `b_Iperiod_11E2:Ty` + 
+                     day * `b_Ty:day_c`  +  day_sq * `b_Ty:Iday_cE2` +  
+                     period_11*day*`b_period_11:Ty:day_c`  + period_11sq*day*`b_Iperiod_11E2:Ty:day_c` + 
+                     period_11*day_sq*`b_period_11:Ty:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Ty:Iday_cE2`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(x = "time bin", y = "effect of T") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+p9 <- post %>% 
+  mutate(day = -2,
+         day_sq = day^2,
+         postdistr = b_NaTy + period_11 * `b_period_11:NaTy` + period_11sq * `b_Iperiod_11E2:NaTy` + 
+                     day * `b_NaTy:day_c`  +  day_sq * `b_NaTy:Iday_cE2` +  
+                     period_11*day*`b_period_11:NaTy:day_c`  + period_11sq*day*`b_Iperiod_11E2:NaTy:day_c` + 
+                     period_11*day_sq*`b_period_11:NaTy:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:NaTy:Iday_cE2`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(x = "time bin", y = "effect of N+T") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+# effects on day 2
+p10 <- post %>% 
+  mutate(day = -3,
+         day_sq = day^2,
+         postdistr = b_Na + period_11 * `b_period_11:Na` + period_11sq * `b_Iperiod_11E2:Na` + 
+                     day * `b_Na:day_c`  +  day_sq * `b_Na:Iday_cE2` +  
+                     period_11*day*`b_period_11:Na:day_c`  + period_11sq*day*`b_Iperiod_11E2:Na:day_c` + 
+                     period_11*day_sq*`b_period_11:Na:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Na:Iday_cE2`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(title="Day 2", x = "time bin", y = "effect of N") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+p11 <- post %>% 
+  mutate(day = -3,
+         day_sq = day^2,
+         postdistr = b_Ty + period_11 * `b_period_11:Ty` + period_11sq * `b_Iperiod_11E2:Ty` + 
+                     day * `b_Ty:day_c`  +  day_sq * `b_Ty:Iday_cE2` +  
+                     period_11*day*`b_period_11:Ty:day_c`  + period_11sq*day*`b_Iperiod_11E2:Ty:day_c` + 
+                     period_11*day_sq*`b_period_11:Ty:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Ty:Iday_cE2`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(x = "time bin", y = "effect of T") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+p12 <- post %>% 
+  mutate(day = -3,
+         day_sq = day^2,
+         postdistr = b_NaTy + period_11 * `b_period_11:NaTy` + period_11sq * `b_Iperiod_11E2:NaTy` + 
+                     day * `b_NaTy:day_c`  +  day_sq * `b_NaTy:Iday_cE2` +  
+                     period_11*day*`b_period_11:NaTy:day_c`  + period_11sq*day*`b_Iperiod_11E2:NaTy:day_c` + 
+                     period_11*day_sq*`b_period_11:NaTy:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:NaTy:Iday_cE2`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(x = "time bin", y = "effect of N+T") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+# effects on day 1
+p13 <- post %>% 
+  mutate(day = -4,
+         day_sq = day^2,
+         postdistr = b_Na + period_11 * `b_period_11:Na` + period_11sq * `b_Iperiod_11E2:Na` + 
+                     day * `b_Na:day_c`  +  day_sq * `b_Na:Iday_cE2` +  
+                     period_11*day*`b_period_11:Na:day_c`  + period_11sq*day*`b_Iperiod_11E2:Na:day_c` + 
+                     period_11*day_sq*`b_period_11:Na:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Na:Iday_cE2`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(title="Day 1", x = "time bin", y = "effect of N") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+p14 <- post %>% 
+  mutate(day = -4,
+         day_sq = day^2,
+         postdistr = b_Ty + period_11 * `b_period_11:Ty` + period_11sq * `b_Iperiod_11E2:Ty` + 
+                     day * `b_Ty:day_c`  +  day_sq * `b_Ty:Iday_cE2` +  
+                     period_11*day*`b_period_11:Ty:day_c`  + period_11sq*day*`b_Iperiod_11E2:Ty:day_c` + 
+                     period_11*day_sq*`b_period_11:Ty:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Ty:Iday_cE2`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon() +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(x = "time bin", y = "effect of T") +
+  theme(panel.grid = element_blank(),
+        legend.position = "bottom",
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=8),
+        legend.key.size = unit(.4, 'cm'),
+        axis.text.x = element_text(angle=90)) 
+
+p15 <- post %>% 
+  mutate(day = -4,
+         day_sq = day^2,
+         postdistr = b_NaTy + period_11 * `b_period_11:NaTy` + period_11sq * `b_Iperiod_11E2:NaTy` + 
+                     day * `b_NaTy:day_c`  +  day_sq * `b_NaTy:Iday_cE2` +  
+                     period_11*day*`b_period_11:NaTy:day_c`  + period_11sq*day*`b_Iperiod_11E2:NaTy:day_c` + 
+                     period_11*day_sq*`b_period_11:NaTy:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:NaTy:Iday_cE2`) %>%
+  group_by(period_11) %>%
+  
+  ggplot(aes(x = period_11, y = postdistr)) +
+  stat_lineribbon(show.legend=F) +
+  scale_fill_brewer() +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  scale_x_continuous(breaks = c(-3:4), labels=c(((-3:4)+11)*100),
+                     limits = c(-3,4)) +
+  labs(x = "time bin", y = "effect of N+T") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) 
+
+(p1+p2+p3)/(p4+p5+p6)/(p7+p8+p9)/(p10+p11+p12)/(p13+p14+p15)
+
+ggsave("figures/effects_sim_knot.png", width = 12, height = 16, dpi = 600)
+```
+
+Plot using stat_halfeye():
+
+```{r}
+post <-as_draws_df(model_sim_knot) %>% # 500 x 956
+   select(starts_with("b_")) %>%       # 500 x 36
+   expand_grid(period_11 = -3:4) %>%   # 4000 x 37
+   mutate(period_11sq = period_11^2)
+
+p1 <- post %>% 
+  mutate(postdistr = b_Na + period_11 * `b_period_11:Na` + period_11sq * `b_Iperiod_11E2:Na`,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(title = "Day 5", y = "time bin", x = "effect of N") +
+  theme(panel.grid = element_blank()) 
+
+p2 <- post %>% 
+  mutate(postdistr = b_Ty + period_11 * `b_period_11:Ty` + period_11sq * `b_Iperiod_11E2:Ty`,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(y = "time bin", x = "effect of T") +
+  theme(panel.grid = element_blank()) 
+
+p3 <- post %>% 
+  mutate(postdistr = b_NaTy + period_11 * `b_period_11:NaTy` + period_11sq * `b_Iperiod_11E2:NaTy`,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(y = "time bin", x = "effect of N+T") +
+  theme(panel.grid = element_blank()) 
+
+# effects on day 4
+p4 <- post %>% 
+  mutate(day = -1,
+         day_sq = day^2,
+         postdistr = b_Na + period_11 * `b_period_11:Na` + period_11sq * `b_Iperiod_11E2:Na` + 
+                     day * `b_Na:day_c`  +  day_sq * `b_Na:Iday_cE2` +  
+                     period_11*day*`b_period_11:Na:day_c`  + period_11sq*day*`b_Iperiod_11E2:Na:day_c` + 
+                     period_11*day_sq*`b_period_11:Na:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Na:Iday_cE2` ,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(title = "Day 4", y = "time bin", x = "effect of N") +
+  theme(panel.grid = element_blank()) 
+
+p5 <- post %>% 
+  mutate(day = -1,
+         day_sq = day^2,
+         postdistr = b_Ty + period_11 * `b_period_11:Ty` + period_11sq * `b_Iperiod_11E2:Ty` + 
+                     day * `b_Ty:day_c`  +  day_sq * `b_Ty:Iday_cE2` +  
+                     period_11*day*`b_period_11:Ty:day_c`  + period_11sq*day*`b_Iperiod_11E2:Ty:day_c` + 
+                     period_11*day_sq*`b_period_11:Ty:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Ty:Iday_cE2` ,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(y = "time bin", x = "effect of T") +
+  theme(panel.grid = element_blank()) 
+
+p6 <- post %>% 
+  mutate(day = -1,
+         day_sq = day^2,
+         postdistr = b_NaTy + period_11 * `b_period_11:NaTy` + period_11sq * `b_Iperiod_11E2:NaTy` + 
+                     day * `b_NaTy:day_c`  +  day_sq * `b_NaTy:Iday_cE2` +  
+                     period_11*day*`b_period_11:NaTy:day_c`  + period_11sq*day*`b_Iperiod_11E2:NaTy:day_c` + 
+                     period_11*day_sq*`b_period_11:NaTy:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:NaTy:Iday_cE2` ,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(y = "time bin", x = "effect of N+T") +
+  theme(panel.grid = element_blank()) 
+
+# effects on day 3
+p7 <- post %>% 
+  mutate(day = -2,
+         day_sq = day^2,
+         postdistr = b_Na + period_11 * `b_period_11:Na` + period_11sq * `b_Iperiod_11E2:Na` + 
+                     day * `b_Na:day_c`  +  day_sq * `b_Na:Iday_cE2` +  
+                     period_11*day*`b_period_11:Na:day_c`  + period_11sq*day*`b_Iperiod_11E2:Na:day_c` + 
+                     period_11*day_sq*`b_period_11:Na:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Na:Iday_cE2` ,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(title = "Day 3", y = "time bin", x = "effect of N") +
+  theme(panel.grid = element_blank()) 
+
+p8 <- post %>% 
+  mutate(day = -2,
+         day_sq = day^2,
+         postdistr = b_Ty + period_11 * `b_period_11:Ty` + period_11sq * `b_Iperiod_11E2:Ty` + 
+                     day * `b_Ty:day_c`  +  day_sq * `b_Ty:Iday_cE2` +  
+                     period_11*day*`b_period_11:Ty:day_c`  + period_11sq*day*`b_Iperiod_11E2:Ty:day_c` + 
+                     period_11*day_sq*`b_period_11:Ty:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Ty:Iday_cE2` ,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(y = "time bin", x = "effect of T") +
+  theme(panel.grid = element_blank()) 
+
+p9 <- post %>% 
+  mutate(day = -2,
+         day_sq = day^2,
+         postdistr = b_NaTy + period_11 * `b_period_11:NaTy` + period_11sq * `b_Iperiod_11E2:NaTy` + 
+                     day * `b_NaTy:day_c`  +  day_sq * `b_NaTy:Iday_cE2` +  
+                     period_11*day*`b_period_11:NaTy:day_c`  + period_11sq*day*`b_Iperiod_11E2:NaTy:day_c` + 
+                     period_11*day_sq*`b_period_11:NaTy:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:NaTy:Iday_cE2` ,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(y = "time bin", x = "effect of N+T") +
+  theme(panel.grid = element_blank()) 
+
+# effects on day 2
+p10 <- post %>% 
+  mutate(day = -3,
+         day_sq = day^2,
+         postdistr = b_Na + period_11 * `b_period_11:Na` + period_11sq * `b_Iperiod_11E2:Na` + 
+                     day * `b_Na:day_c`  +  day_sq * `b_Na:Iday_cE2` +  
+                     period_11*day*`b_period_11:Na:day_c`  + period_11sq*day*`b_Iperiod_11E2:Na:day_c` + 
+                     period_11*day_sq*`b_period_11:Na:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Na:Iday_cE2` ,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(title = "Day 2", y = "time bin", x = "effect of N") +
+  theme(panel.grid = element_blank()) 
+
+p11 <- post %>% 
+  mutate(day = -3,
+         day_sq = day^2,
+         postdistr = b_Ty + period_11 * `b_period_11:Ty` + period_11sq * `b_Iperiod_11E2:Ty` + 
+                     day * `b_Ty:day_c`  +  day_sq * `b_Ty:Iday_cE2` +  
+                     period_11*day*`b_period_11:Ty:day_c`  + period_11sq*day*`b_Iperiod_11E2:Ty:day_c` + 
+                     period_11*day_sq*`b_period_11:Ty:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Ty:Iday_cE2` ,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(y = "time bin", x = "effect of T") +
+  theme(panel.grid = element_blank()) 
+
+p12 <- post %>% 
+  mutate(day = -3,
+         day_sq = day^2,
+         postdistr = b_NaTy + period_11 * `b_period_11:NaTy` + period_11sq * `b_Iperiod_11E2:NaTy` + 
+                     day * `b_NaTy:day_c`  +  day_sq * `b_NaTy:Iday_cE2` +  
+                     period_11*day*`b_period_11:NaTy:day_c`  + period_11sq*day*`b_Iperiod_11E2:NaTy:day_c` + 
+                     period_11*day_sq*`b_period_11:NaTy:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:NaTy:Iday_cE2` ,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(y = "time bin", x = "effect of N+T") +
+  theme(panel.grid = element_blank()) 
+
+# effects on day 1
+p13 <- post %>% 
+  mutate(day = -4,
+         day_sq = day^2,
+         postdistr = b_Na + period_11 * `b_period_11:Na` + period_11sq * `b_Iperiod_11E2:Na` + 
+                     day * `b_Na:day_c`  +  day_sq * `b_Na:Iday_cE2` +  
+                     period_11*day*`b_period_11:Na:day_c`  + period_11sq*day*`b_Iperiod_11E2:Na:day_c` + 
+                     period_11*day_sq*`b_period_11:Na:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Na:Iday_cE2` ,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(title = "Day 2", y = "time bin", x = "effect of N") +
+  theme(panel.grid = element_blank()) 
+
+p14 <- post %>% 
+  mutate(day = -4,
+         day_sq = day^2,
+         postdistr = b_Ty + period_11 * `b_period_11:Ty` + period_11sq * `b_Iperiod_11E2:Ty` + 
+                     day * `b_Ty:day_c`  +  day_sq * `b_Ty:Iday_cE2` +  
+                     period_11*day*`b_period_11:Ty:day_c`  + period_11sq*day*`b_Iperiod_11E2:Ty:day_c` + 
+                     period_11*day_sq*`b_period_11:Ty:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:Ty:Iday_cE2` ,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(y = "time bin", x = "effect of T") +
+  theme(panel.grid = element_blank()) 
+
+p15 <- post %>% 
+  mutate(day = -4,
+         day_sq = day^2,
+         postdistr = b_NaTy + period_11 * `b_period_11:NaTy` + period_11sq * `b_Iperiod_11E2:NaTy` + 
+                     day * `b_NaTy:day_c`  +  day_sq * `b_NaTy:Iday_cE2` +  
+                     period_11*day*`b_period_11:NaTy:day_c`  + period_11sq*day*`b_Iperiod_11E2:NaTy:day_c` + 
+                     period_11*day_sq*`b_period_11:NaTy:Iday_cE2` + period_11sq*day_sq*`b_Iperiod_11E2:NaTy:Iday_cE2` ,
+         period = factor(period_11, levels = c(-3:4), labels = c(8:15))) %>%
+  group_by(period) %>%
+  
+  ggplot(aes(x = postdistr, y = period)) +
+  stat_halfeye(point_interval="median_qi",.width = c(.50,.90)) +
+  coord_flip() +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  labs(y = "time bin", x = "effect of N+T") +
+  theme(panel.grid = element_blank()) 
+
+(p1+p2+p3)/(p4+p5+p6)/(p7+p8+p9)/(p10+p11+p12)/(p13+p14+p15)
+```
+
