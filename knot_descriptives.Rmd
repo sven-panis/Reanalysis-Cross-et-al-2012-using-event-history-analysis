@@ -1,0 +1,263 @@
+---
+title: "knot_descriptives"
+author: "sven panis"
+date: "2024-06-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load-packages, include=F}
+library(tidyverse) # data wrangling
+library(patchwork) # combine figures
+```
+
+Calculates descriptive statistics for the behavioral data of Cross et. al (2012).
+
+```{r}
+# load the datafile
+data_orig <- read_csv(file = "data/data.csv") # 15120 obs. of 17 variables
+
+summary(data_orig)
+
+data_orig %>% head(n=20)
+
+# pid: 1-20 ? 
+# RT: 375-2499 ms / NA: 452
+# RESPONSE: 1 = match, 2 = nomatch / NA: 452
+# GROUP: 1 - 4
+# MATCH: 1 = yes, 2 = no
+# DAY: 1 - 5
+
+# select relevant variables, and add accuracy column
+data <- data_orig %>%
+  select(pid, RESPONSE, RT, GROUP, MATCH, DAY) %>%
+  mutate(acc = ifelse(RESPONSE==MATCH,1,0))
+
+# check...
+head(data)
+summary(data)
+data %>% group_by(GROUP) %>% count() # 3780 trials per GROUP
+
+# Rename columns to match with functions
+names(data) <- c("pid", "resp", "RT", "iv2", "match", "iv1", "acc")
+head(data)
+
+# Add trial number per subject
+data <- data %>% group_by(pid) %>% mutate(trial = row_number())
+head(data)
+summary(data)
+
+# check number of trials per GROUP and subject
+SUM <- data %>% group_by(pid,iv2) %>% count() 
+print.data.frame(SUM) # 140, 160, 180, or 200 trials per GROUP per subject...
+
+# remove trials where response = NA
+data_clean <- data %>% drop_na() # 14668 trials left
+head(data_clean)
+
+# add condition indicating each combination of iv2 (GROUP) and iv1 (day)
+data_clean <- data_clean %>% mutate(condition = (4*(iv1-1)) + iv2) 
+head(data_clean) 
+summary(data_clean)
+```
+
+Nest data within participants.
+
+```{r nest-subjects}
+data_nested <- data_clean %>% group_nest(pid)
+```
+
+Now define and apply various functions using map and map2, to set-up life tables and create plots showing the descriptive functions of discrete time.
+
+```{r func-define-censoring-drt}
+censor <- function(df, timeout, bin_width){
+  if(!(timeout %% bin_width == 0)){
+    return("The censoring time must be a multiple of the bin width!")
+  }
+  df %>% mutate(right_censored = 0,
+                RT2 = ifelse(RT > timeout, timeout, RT) %>% round(digits=2),
+                right_censored = ifelse(RT2 == timeout,1,right_censored),
+                dRT = ceiling(RT2/bin_width),
+                cens_time = timeout, bin_width = bin_width)
+}
+```
+
+```{r func-setup-ptb}
+ptb <- function(df){
+  df %>% uncount(weights = dRT) %>% 
+         group_by(trial) %>% 
+         mutate(period = 1:n()) %>% 
+         mutate(event = if_else(period == max(period) & right_censored == 0, 1, 0)) %>% 
+         ungroup()
+}
+```
+
+```{r func-setup-lifetable}
+setup_lt_2iv <- function(ptb){
+  ptb %>% mutate(event = str_c("event", event)) %>%
+          group_by(condition, iv1, iv2, period) %>% 
+          count(event) %>% 
+          ungroup() %>% 
+          pivot_wider(names_from = event,
+                      values_from = n) %>% 
+          mutate(event0 = ifelse(is.na(event0),0,event0), # replace NA with 0
+                 event1 = ifelse(is.na(event1),0,event1),
+                 risk_set = event0 + event1) %>% # define the risk set
+          mutate(hazard = (event1 / risk_set) %>% round(digits = 3)) %>% # calculate hazard estimate
+          mutate(se_haz = sqrt((hazard * (1 - hazard)) / risk_set) %>% round(digits = 4)) %>% # se hazard
+          group_by(condition) %>%
+          mutate(survival = (cumprod(1-hazard)) %>% round(digits = 4), # calculate survival estimate
+                 term     = (cumsum(hazard / (risk_set * (1 - hazard)))) %>% round(digits = 7),
+                 se_surv  = (survival * sqrt(term)) %>% round(digits = 5)  ) %>% # Greenwood's (1926) approximation
+          ungroup() 
+}
+```
+
+```{r func-conditional-accuracy}
+calc_ca <- function(df){
+  df %>% filter(right_censored==0) %>%
+         group_by(condition,dRT,cens_time,bin_width) %>%
+         summarize(ca = mean(acc) %>% round(digits = 2),
+                   n = n(),
+                   .groups = 'drop') %>%
+         ungroup() %>%
+         mutate(period = dRT,
+                se_ca = sqrt((ca * (1-ca)) / n) %>% round(digits = 3)) %>%
+         select(-dRT)
+}
+```
+
+```{r func-join}
+join_lt_ca <- function(df1,df2){df1 %>% left_join(df2, join_by(condition,period))}
+```
+
+```{r func-extract-median}
+extract_median <- function(df){
+  above_pct50 <- df %>% 
+      group_by(condition) %>%
+      filter(survival > .5) %>% 
+      slice(n()) # take last row
+  below_pct50 <- df %>% 
+      group_by(condition) %>%
+      filter(survival < .5) %>% 
+      slice(1) # take first row
+  # pull period above
+  period_above <- pull(above_pct50, period)
+  # pull survivor function values
+  survival_above <- pull(above_pct50, survival)
+  survival_below <- pull(below_pct50, survival)
+  # estimate median by interpolation
+  median_period <- period_above+((survival_above-.5)/(survival_above-survival_below))*((period_above+1)-period_above)
+}
+```
+
+```{r func-make-plot-2iv}
+plot_eha_2iv <- function(df,subj){
+  library(patchwork)
+  cutoff <- df %>% pull(cens_time) %>% max(na.rm=T)
+  binsize <- df %>% pull(bin_width) %>% max(na.rm=T)
+  median_period <- extract_median(df)
+  n_iv1 <- nlevels(factor(df$iv1))
+  n_iv2 <- nlevels(factor(df$iv2))
+  n_conditions <- n_iv1*n_iv2
+  # set up tibble to plot verticl lines indicating S(t).50 for each condition
+  data_median <- c()
+  for(i in 1:n_conditions){
+    data_median <- append(data_median, c(median_period[i], median_period[i]))
+  }
+  data_medians <- tibble(period= data_median,
+                         survival = rep(c(.5, 0),n_conditions),
+                         condition = rep(1:n_conditions, each=2),
+                         train =  factor(rep(rep(1:n_iv2, each=2),n_iv1),levels=c(1:4),labels=c("no training", "naming", "tying", "naming+tying")),
+                         day = factor(rep(1:n_iv1, each=2*n_iv2),levels=c(1:5),labels=str_c("day ",1:5)  ))
+  
+p1 <-df %>% 
+  mutate(day = factor(iv1,levels=c(1:5),labels=str_c("day ",1:5)  )) %>% 
+  mutate(train = factor(iv2,levels=c(1:4),labels=c("no training", "naming", "tying", "naming+tying")  )) %>% 
+                           
+  ggplot(aes(x=period, color=train, group=train)) +
+  geom_line(aes(y=hazard)) +
+  geom_point(aes(y=hazard), size=1) + labs(color="Training condition") +
+  geom_linerange(aes(ymin=hazard-se_haz, ymax=hazard+se_haz), show.legend = F) +
+  scale_x_continuous(breaks = c(0,1:(cutoff/binsize)), labels=c(0,1:(cutoff/binsize)*binsize),
+                     limits = c(0,cutoff/binsize)) +
+  scale_y_continuous(limits = c(0,1)) +
+  labs(x="", y="h(t)", title = paste("Subject ", subj)) +
+  theme(legend.background = element_rect(fill = "transparent"),
+        panel.grid = element_blank(),
+        legend.position = "top",
+        axis.text.x = element_text(angle=90)) +
+  facet_wrap(~day, nrow=1,ncol=5)
+
+p2 <-df %>%
+  mutate(day = factor(iv1,levels=c(1:5),labels=str_c("day ",1:5)  )) %>% 
+  mutate(train = factor(iv2,levels=c(1:4),labels=c("no training", "naming", "tying", "naming+tying")  )) %>% 
+  ggplot(aes(x=period, color=train, group=train)) +
+  geom_line(aes(y=survival), show.legend = F) +
+  geom_point(aes(y=survival), size=1, show.legend = F) +
+  
+  geom_linerange(aes(ymin=survival-se_surv, ymax=survival+se_surv), show.legend = F) +
+  # add medians
+  geom_path(aes(x=period, y=survival),
+            data = data_medians, 
+            linetype = 1, show.legend = F) +
+  scale_x_continuous(breaks = c(0,1:(cutoff/binsize)), labels=c(0,1:(cutoff/binsize)*binsize),
+                     limits=c(0,cutoff/binsize)) +
+  scale_y_continuous(limits = c(0,1)) +
+  labs(x="", y="S(t)") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) +
+  facet_wrap(~day, nrow=1,ncol=5)
+
+p3 <-df %>%
+  mutate(day = factor(iv1,levels=c(1:5),labels=str_c("day ",1:5)  )) %>% 
+  mutate(train = factor(iv2,levels=c(1:4),labels=c("no training", "naming", "tying", "naming+tying")  )) %>% 
+  ggplot(aes(x=period, color=train, group=train)) +
+  geom_line(aes(y=ca), show.legend = F) +
+  geom_point(aes(y=ca), size=1, show.legend = F) +
+  geom_linerange(aes(ymin=ca-se_ca, ymax=ca+se_ca), show.legend = F) +
+  scale_x_continuous(breaks = c(0,1:(cutoff/binsize)), labels=c(0,1:(cutoff/binsize)*binsize),
+                     limits=c(0,cutoff/binsize)) +
+  scale_y_continuous(limits = c(0,1)) +
+  labs(x="Time bin t's endpoint (ms)", y="ca(t)",
+       colour="Condition") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) +
+  facet_wrap(~day, nrow=1,ncol=5)
+
+p1/p2/p3
+}
+```
+
+Apply the functions using map and map2 to create the life tables and plots, for each participant.
+
+```{r apply-functions}
+data_final <- data_nested %>% 
+                     mutate(censored  = map(data, censor, 2000, 200)) %>%  # user input: censoring time, bin width
+                     mutate(ptb_data  = map(censored, ptb)) %>%            # create person-trial-bin dataset
+                     mutate(lifetable = map(ptb_data, setup_lt_2iv)) %>%   # create life tables without ca for 2 IV's
+                     mutate(condacc   = map(censored, calc_ca)) %>%        # calculate ca
+                     mutate(lifetable_ca = map2(lifetable, condacc, join_lt_ca)) %>%  # create life tables with ca
+                     mutate(plot      = map2(.x = lifetable_ca, .y = pid, plot_eha_2iv))  # create plots of info in life tables for 2 IV's
+```
+
+```{r extract-info}
+# pull censored for subject 1
+pluck(data_final,3,1)
+
+# pull ptb for subject 2
+pluck(data_final,4,2)
+
+# pull lifetable for subject 20 and condition 1 (day1 and training condition 1)
+pluck(data_final,5,20) %>% filter(condition==4)
+
+# pull full lifetable for subject 1 and condition 20
+pluck(data_final,7,1) %>% filter(condition==20)
+
+# view plot for subject 1
+pluck(data_final,8,2)
+```
+
