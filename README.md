@@ -36,5 +36,11 @@ In sim_inferential.Rmd we fit Bayesian hazard models to the simulated data set, 
 
 ## Analysis of experimental data reported by Cross et al. (2012)
 
-ToDo.
+* knot_descriptives.Rmd
+
+Calculates descriptive statistics for the behavioral data of Cross et. al (2012).
+
+* knot_inferential.Rmd
+
+Fits the Bayesian model specified in the preregistration file. 
 
