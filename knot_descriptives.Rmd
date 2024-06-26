@@ -14,7 +14,9 @@ library(tidyverse) # data wrangling
 library(patchwork) # combine figures
 ```
 
-Calculates descriptive statistics for the behavioral data of Cross et. al (2012).
+# Calculate descriptive statistics for the behavioral data of Cross et. al (2012).
+
+## Separately for each subject.
 
 ```{r}
 # load the datafile
@@ -46,7 +48,7 @@ names(data) <- c("pid", "resp", "RT", "iv2", "match", "iv1", "acc")
 head(data)
 
 # Add trial number per subject
-data <- data %>% group_by(pid) %>% mutate(trial = row_number())
+data <- data %>% group_by(pid) %>% mutate(trial = row_number()) %>% ungroup()
 head(data)
 summary(data)
 
@@ -163,7 +165,7 @@ plot_eha_2iv <- function(df,subj){
   n_iv1 <- nlevels(factor(df$iv1))
   n_iv2 <- nlevels(factor(df$iv2))
   n_conditions <- n_iv1*n_iv2
-  # set up tibble to plot verticl lines indicating S(t).50 for each condition
+  # set up tibble to plot vertical lines indicating S(t).50 for each condition
   data_median <- c()
   for(i in 1:n_conditions){
     data_median <- append(data_median, c(median_period[i], median_period[i]))
@@ -171,12 +173,12 @@ plot_eha_2iv <- function(df,subj){
   data_medians <- tibble(period= data_median,
                          survival = rep(c(.5, 0),n_conditions),
                          condition = rep(1:n_conditions, each=2),
-                         train =  factor(rep(rep(1:n_iv2, each=2),n_iv1),levels=c(1:4),labels=c("no training", "naming", "tying", "naming+tying")),
+                         train =  factor(rep(rep(1:n_iv2, each=2),n_iv1),levels=c(1:4),labels=c("naming", "tying", "naming+tying","no training")),
                          day = factor(rep(1:n_iv1, each=2*n_iv2),levels=c(1:5),labels=str_c("day ",1:5)  ))
   
 p1 <-df %>% 
   mutate(day = factor(iv1,levels=c(1:5),labels=str_c("day ",1:5)  )) %>% 
-  mutate(train = factor(iv2,levels=c(1:4),labels=c("no training", "naming", "tying", "naming+tying")  )) %>% 
+  mutate(train = factor(iv2,levels=c(1:4),labels=c("naming", "tying", "naming+tying","no training")  )) %>% 
                            
   ggplot(aes(x=period, color=train, group=train)) +
   geom_line(aes(y=hazard)) +
@@ -194,7 +196,7 @@ p1 <-df %>%
 
 p2 <-df %>%
   mutate(day = factor(iv1,levels=c(1:5),labels=str_c("day ",1:5)  )) %>% 
-  mutate(train = factor(iv2,levels=c(1:4),labels=c("no training", "naming", "tying", "naming+tying")  )) %>% 
+  mutate(train = factor(iv2,levels=c(1:4),labels=c("naming", "tying", "naming+tying", "no training")  )) %>% 
   ggplot(aes(x=period, color=train, group=train)) +
   geom_line(aes(y=survival), show.legend = F) +
   geom_point(aes(y=survival), size=1, show.legend = F) +
@@ -214,7 +216,7 @@ p2 <-df %>%
 
 p3 <-df %>%
   mutate(day = factor(iv1,levels=c(1:5),labels=str_c("day ",1:5)  )) %>% 
-  mutate(train = factor(iv2,levels=c(1:4),labels=c("no training", "naming", "tying", "naming+tying")  )) %>% 
+  mutate(train = factor(iv2,levels=c(1:4),labels=c("naming", "tying", "naming+tying","no training")  )) %>% 
   ggplot(aes(x=period, color=train, group=train)) +
   geom_line(aes(y=ca), show.legend = F) +
   geom_point(aes(y=ca), size=1, show.legend = F) +
@@ -260,4 +262,122 @@ pluck(data_final,7,1) %>% filter(condition==20)
 # view plot for subject 1
 pluck(data_final,8,2)
 ```
+
+## Aggregated across subjects
+
+Make 1 plot for all data.
+This requires a single pid, and a trial column that identifies each unique trial.
+
+```{r}
+# create new pid and trial variables
+data_clean_single <- data_clean %>% mutate(oldtrial=trial,
+                                              oldpid=pid,
+                                              trial = 1:n(),
+                                              pid = 1)
+summary(data_clean_single)
+
+head(data_clean_single)
+```
+
+
+```{r func-make-plot-2iv}
+plot_eha_2iv_lim <- function(df,subj){
+  library(patchwork)
+  cutoff <- df %>% pull(cens_time) %>% max(na.rm=T)
+  binsize <- df %>% pull(bin_width) %>% max(na.rm=T)
+  median_period <- extract_median(df)
+  n_iv1 <- nlevels(factor(df$iv1))
+  n_iv2 <- nlevels(factor(df$iv2))
+  n_conditions <- n_iv1*n_iv2
+  # set up tibble to plot vertical lines indicating S(t).50 for each condition
+  data_median <- c()
+  for(i in 1:n_conditions){
+    data_median <- append(data_median, c(median_period[i], median_period[i]))
+  }
+  data_medians <- tibble(period= data_median,
+                         survival = rep(c(.5, 0),n_conditions),
+                         condition = rep(1:n_conditions, each=2),
+                         train =  factor(rep(rep(1:n_iv2, each=2),n_iv1),levels=c(1:4),labels=c("naming", "tying", "naming+tying","no training")),
+                         day = factor(rep(1:n_iv1, each=2*n_iv2),levels=c(1:5),labels=str_c("day ",1:5)  ))
+  
+p1 <-df %>% 
+  mutate(day = factor(iv1,levels=c(1:5),labels=str_c("day ",1:5)  )) %>% 
+  mutate(train = factor(iv2,levels=c(1:4),labels=c("naming", "tying", "naming+tying","no training")  )) %>% 
+                           
+  ggplot(aes(x=period, color=train, group=train)) +
+  geom_line(aes(y=hazard)) +
+  geom_point(aes(y=hazard), size=1) + labs(color="Training condition") +
+  geom_linerange(aes(ymin=hazard-se_haz, ymax=hazard+se_haz), show.legend = F) +
+  scale_x_continuous(breaks = c(0,1:(cutoff/binsize)), labels=c(0,1:(cutoff/binsize)*binsize),
+                     limits = c(0,cutoff/binsize)) +
+  scale_y_continuous(limits = c(0,.3)) +
+  labs(x="", y="h(t)", title = paste("Subject ", subj)) +
+  theme(legend.background = element_rect(fill = "transparent"),
+        panel.grid = element_blank(),
+        legend.position = "top",
+        axis.text.x = element_text(angle=90)) +
+  facet_wrap(~day, nrow=1,ncol=5)
+
+p2 <-df %>%
+  mutate(day = factor(iv1,levels=c(1:5),labels=str_c("day ",1:5)  )) %>% 
+  mutate(train = factor(iv2,levels=c(1:4),labels=c("naming", "tying", "naming+tying", "no training")  )) %>% 
+  ggplot(aes(x=period, color=train, group=train)) +
+  geom_line(aes(y=survival), show.legend = F) +
+  geom_point(aes(y=survival), size=1, show.legend = F) +
+  
+  geom_linerange(aes(ymin=survival-se_surv, ymax=survival+se_surv), show.legend = F) +
+  # add medians
+  geom_path(aes(x=period, y=survival),
+            data = data_medians, 
+            linetype = 1, show.legend = F) +
+  scale_x_continuous(breaks = c(0,1:(cutoff/binsize)), labels=c(0,1:(cutoff/binsize)*binsize),
+                     limits=c(0,cutoff/binsize)) +
+  scale_y_continuous(limits = c(0,1)) +
+  labs(x="", y="S(t)") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) +
+  facet_wrap(~day, nrow=1,ncol=5)
+
+p3 <-df %>%
+  mutate(day = factor(iv1,levels=c(1:5),labels=str_c("day ",1:5)  )) %>% 
+  mutate(train = factor(iv2,levels=c(1:4),labels=c("naming", "tying", "naming+tying","no training")  )) %>% 
+  ggplot(aes(x=period, color=train, group=train)) +
+  geom_line(aes(y=ca), show.legend = F) +
+  geom_point(aes(y=ca), size=1, show.legend = F) +
+  geom_linerange(aes(ymin=ca-se_ca, ymax=ca+se_ca), show.legend = F) +
+  scale_x_continuous(breaks = c(0,1:(cutoff/binsize)), labels=c(0,1:(cutoff/binsize)*binsize),
+                     limits=c(0,cutoff/binsize)) +
+  scale_y_continuous(limits = c(0,1)) +
+  labs(x="Time bin t's endpoint (ms)", y="ca(t)",
+       colour="Condition") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) +
+  facet_wrap(~day, nrow=1,ncol=5)
+
+p1/p2/p3
+}
+```
+
+```{r}
+data_nested_single <- data_clean_single %>% group_nest(pid)
+
+data_final_single <- data_nested_single %>% 
+                     mutate(censored  = map(data, censor, 1500, 75)) %>%  # user input: censoring time, bin width
+                     mutate(ptb_data  = map(censored, ptb)) %>%            # create person-trial-bin dataset
+                     mutate(lifetable = map(ptb_data, setup_lt_2iv)) %>%   # create life tables without ca for 2 IV's
+                     mutate(condacc   = map(censored, calc_ca)) %>%        # calculate ca
+                     mutate(lifetable_ca = map2(lifetable, condacc, join_lt_ca)) %>%  # create life tables with ca
+                     mutate(plot      = map2(.x = lifetable_ca, .y = pid, plot_eha_2iv_lim))  # create plots of info in life tables for 2 IV's
+```
+
+
+```{r}
+# view plot for subject 1
+pluck(data_final_single,8,1)
+```
+
+## Apply clustering algorithm?
+
+
+
 
