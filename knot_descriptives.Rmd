@@ -14,7 +14,90 @@ library(tidyverse) # data wrangling
 library(patchwork) # combine figures
 ```
 
-# Calculate descriptive statistics for the behavioral data of Cross et. al (2012).
+# Calculate mean RTs to compare with reported values
+
+```{r}
+# load the datafile
+data_orig <- read_csv(file = "data/data.csv") # 15120 obs. of 17 variables
+summary(data_orig)
+
+# check
+test <- data_orig %>% group_by(pid, DAY, SESSION) %>% summarise(N = n())
+print.data.frame(test)
+
+# Missing 12 sessions (of 200 sessions): Note there are 160 trials in s2 of d5 of s6
+# s2 of d1 of s1
+# s2 of d2 of s3
+# s2 of d5 of s3
+# s2 of d1 of s6
+# s1 of d2 of s7
+# s2 of d1 of s14
+# s2 of d1 of s15
+# s2 of d2 of s15
+# s2 of d1 of s16
+# s2 of d2 of s17
+# s2 of d3 of s17
+# s2 of d5 of s17
+
+# check 160 trials in session 2 of day 5 of subject 6
+test2 <- data_orig %>% filter(pid==6 & DAY==5 & SESSION==2) %>% select(GROUP)
+print.data.frame(test2)
+
+# remove trials where response = NA (452 trials)
+data2 <- data_orig %>% drop_na() # 14668 trials left
+head(data2)
+
+# select relevant variables, and add accuracy column
+data2 <- data2 %>%
+  select(pid, RESPONSE, RT, GROUP, MATCH, DAY, SESSION) %>%
+  mutate(acc = ifelse(RESPONSE==MATCH,1,0))
+head(data2)
+
+# select correct trials
+data2_acc <- data2 %>% filter(acc==1) # 12783 trials
+head(data2_acc)
+
+# eliminate fastest and slowest 10% of trials, for each testing session of 80 trials:
+
+# combine day and session info
+data2_acc <- data2_acc %>% mutate(testsession = (2*(DAY-1)) + SESSION )
+
+# nest data within pid x testsession
+data2_acc_nest <- data2_acc %>% group_nest(pid,testsession)
+
+pluck(data2_acc_nest,3,1)
+
+# define function to sort RT, calculate 10%, and remove slowest and fastest trials
+trim_data <- function(df){
+  df <- df %>% arrange(RT)
+  Ntrials <- nrow(df) 
+  Nperc <- floor(floor(Ntrials/10) / 2) 
+  df <- df %>% mutate(trim=1) # column 8
+  df[1:Nperc,8] <- 0
+  df[(nrow(df)-Nperc):nrow(df),8] <- 0
+  df <- df %>% filter(trim==1)
+  return(df)
+}
+
+data2_acc_trim <- data2_acc_nest %>% 
+                     mutate(trimmed  = map(data, trim_data)) 
+
+pluck(data2_acc_trim,4,1)
+
+# unnest
+data3 <- data2_acc_trim %>% 
+                        select(pid, testsession, trimmed) %>%  unnest(trimmed)
+head(data3)
+summary(data3)
+
+# plot mean RT for session 2
+data3 <- data3 %>% mutate(GROUP = factor(GROUP, levels = 1:4))
+data3 %>% filter(SESSION==2) %>% 
+  group_by(DAY, GROUP) %>% summarise(meanRT = mean(RT)) %>%
+  ggplot(mapping = aes(DAY, meanRT, group=GROUP, color=GROUP)) + geom_line()
+```
+
+# Calculate EHA descriptive statistics for the behavioral data of Cross et. al (2012).
 
 ## Separately for each subject.
 
@@ -260,7 +343,7 @@ pluck(data_final,5,20) %>% filter(condition==4)
 pluck(data_final,7,1) %>% filter(condition==20)
 
 # view plot for subject 1
-pluck(data_final,8,2)
+pluck(data_final,8,1)
 ```
 
 ## Aggregated across subjects
@@ -281,6 +364,7 @@ head(data_clean_single)
 
 
 ```{r func-make-plot-2iv}
+# limit y-axis for hazard plot
 plot_eha_2iv_lim <- function(df,subj){
   library(patchwork)
   cutoff <- df %>% pull(cens_time) %>% max(na.rm=T)
@@ -376,7 +460,320 @@ data_final_single <- data_nested_single %>%
 pluck(data_final_single,8,1)
 ```
 
-## Apply clustering algorithm?
+
+```{r}
+# save as pdf
+# map2(paste0("figures/figure_aggregated", data_final_single$pid, ".pdf"), data_final_single$plot, ggsave, width = 25, height = 20, units = "cm")
+
+# save as png
+map2(paste0("figures/figure_aggregated", data_final_single$pid, ".png"), data_final_single$plot, ggsave, width = 12, height = 8, dpi = 600)
+
+```
+
+## Calculate descriptive EHA stats for Pre- and Post-training sessions separately (aggregated data)
+
+Pre-training sessions aggregated data
+
+```{r}
+# select pre-training sessions
+# load the datafile
+data_orig <- read_csv(file = "data/data.csv") # 15120 obs. of 17 variables
+summary(data_orig)
+
+# select relevant variables, and add accuracy column
+data_pre <- data_orig %>%
+  select(pid, RESPONSE, RT, GROUP, MATCH, DAY, SESSION) %>%
+  mutate(acc = ifelse(RESPONSE==MATCH,1,0)) %>%
+  filter(SESSION == 1) %>%
+  select(-SESSION)
+
+# check...
+head(data_pre)
+
+# Rename columns to match with functions
+names(data_pre) <- c("pid", "resp", "RT", "iv2", "match", "iv1", "acc")
+head(data_pre)
+
+# Add trial number per subject
+data_pre <- data_pre %>% group_by(pid) %>% mutate(trial = row_number()) %>% ungroup()
+head(data_pre)
+summary(data_pre)
+
+# remove trials where response = NA
+data_pre_clean <- data_pre %>% drop_na() 
+head(data_pre_clean)
+
+# add condition indicating each combination of iv2 (GROUP) and iv1 (day)
+data_pre_clean <- data_pre_clean %>% mutate(condition = (4*(iv1-1)) + iv2) 
+head(data_pre_clean) 
+summary(data_pre_clean)
+
+# create new pid and trial variables for aggregated data plot
+data_pre_clean_single <- data_pre_clean %>% mutate(oldtrial=trial,
+                                              oldpid=pid,
+                                              trial = 1:n(),
+                                              pid = 1)
+summary(data_pre_clean_single)
+head(data_pre_clean_single)
+```
+
+```{r}
+data_nested_single_pre <- data_pre_clean_single %>% group_nest(pid)
+
+data_final_single_pre <- data_nested_single_pre %>% 
+                     mutate(censored  = map(data, censor, 1500, 75)) %>%  # user input: censoring time, bin width
+                     mutate(ptb_data  = map(censored, ptb)) %>%            # create person-trial-bin dataset
+                     mutate(lifetable = map(ptb_data, setup_lt_2iv)) %>%   # create life tables without ca for 2 IV's
+                     mutate(condacc   = map(censored, calc_ca)) %>%        # calculate ca
+                     mutate(lifetable_ca = map2(lifetable, condacc, join_lt_ca)) %>%  # create life tables with ca
+                     mutate(plot      = map2(.x = lifetable_ca, .y = pid, plot_eha_2iv_lim))  # create plots of info in life tables for 2 IV's
+```
+
+```{r}
+# view plot for subject 1
+pluck(data_final_single_pre,8,1)
+```
+
+
+```{r}
+# save as png
+map2(paste0("figures/figure_aggregated_pre", data_final_single_pre$pid, ".png"), data_final_single_pre$plot, ggsave, width = 12, height = 8, dpi = 600)
+```
+
+
+Post-training sessions aggregated data
+
+```{r}
+# select post-training sessions
+# load the datafile
+data_orig <- read_csv(file = "data/data.csv") # 15120 obs. of 17 variables
+summary(data_orig)
+
+# select relevant variables, and add accuracy column
+data_post <- data_orig %>%
+  select(pid, RESPONSE, RT, GROUP, MATCH, DAY, SESSION) %>%
+  mutate(acc = ifelse(RESPONSE==MATCH,1,0)) %>%
+  filter(SESSION == 2) %>%
+  select(-SESSION)
+
+# check...
+head(data_post)
+
+# Rename columns to match with functions
+names(data_post) <- c("pid", "resp", "RT", "iv2", "match", "iv1", "acc")
+head(data_post)
+
+# Add trial number per subject
+data_post <- data_post %>% group_by(pid) %>% mutate(trial = row_number()) %>% ungroup()
+head(data_post)
+summary(data_post)
+
+# remove trials where response = NA
+data_post_clean <- data_post %>% drop_na() 
+head(data_post_clean)
+
+# add condition indicating each combination of iv2 (GROUP) and iv1 (day)
+data_post_clean <- data_post_clean %>% mutate(condition = (4*(iv1-1)) + iv2) 
+head(data_post_clean) 
+summary(data_post_clean)
+
+# create new pid and trial variables for aggregated data plot
+data_post_clean_single <- data_post_clean %>% mutate(oldtrial=trial,
+                                              oldpid=pid,
+                                              trial = 1:n(),
+                                              pid = 1)
+summary(data_post_clean_single)
+head(data_post_clean_single)
+```
+
+```{r}
+data_nested_single_post <- data_post_clean_single %>% group_nest(pid)
+
+data_final_single_post <- data_nested_single_post %>% 
+                     mutate(censored  = map(data, censor, 1500, 75)) %>%  # user input: censoring time, bin width
+                     mutate(ptb_data  = map(censored, ptb)) %>%            # create person-trial-bin dataset
+                     mutate(lifetable = map(ptb_data, setup_lt_2iv)) %>%   # create life tables without ca for 2 IV's
+                     mutate(condacc   = map(censored, calc_ca)) %>%        # calculate ca
+                     mutate(lifetable_ca = map2(lifetable, condacc, join_lt_ca)) %>%  # create life tables with ca
+                     mutate(plot      = map2(.x = lifetable_ca, .y = pid, plot_eha_2iv_lim))  # create plots of info in life tables for 2 IV's
+```
+
+```{r}
+# view plot for subject 1
+pluck(data_final_single_post,8,1)
+```
+
+
+```{r}
+# save as png
+map2(paste0("figures/figure_aggregated_post", data_final_single_post$pid, ".png"), data_final_single_post$plot, ggsave, width = 12, height = 8, dpi = 600)
+```
+
+## Calculate descriptive EHA stats for the four between-training periods
+
+4 between-training sessions aggregated data (first and last session removed)
+
+```{r}
+# select between-training sessions
+# load the datafile
+data_orig <- read_csv(file = "data/data.csv") # 15120 obs. of 17 variables
+data_orig %>% count(DAY)
+# select relevant variables, and add accuracy column
+data_between <- data_orig %>%
+  select(pid, RESPONSE, RT, GROUP, MATCH, DAY, SESSION) %>%
+  mutate(acc = ifelse(RESPONSE==MATCH,1,0),
+         DAY_BETWEEN = ifelse(DAY==1 & SESSION ==1, 0,
+                       ifelse(DAY==1 & SESSION ==2, 1,
+                       ifelse(DAY==2 & SESSION ==1, 1,
+                       ifelse(DAY==2 & SESSION ==2, 2,
+                       ifelse(DAY==3 & SESSION ==1, 2,
+                       ifelse(DAY==3 & SESSION ==2, 3,
+                       ifelse(DAY==4 & SESSION ==1, 3,
+                       ifelse(DAY==4 & SESSION ==2, 4,
+                       ifelse(DAY==5 & SESSION ==1, 4, 0))))))))) )
+data_between %>% count(DAY_BETWEEN)
+
+
+# remove first and last session
+data_between <- data_between %>% filter(DAY_BETWEEN>0)
+
+# remove columns DAY and SESSION
+data_between <- data_between %>% select(-c(DAY,SESSION))
+
+# Rename columns to match with functions
+names(data_between) <- c("pid", "resp", "RT", "iv2", "match", "acc", "iv1")
+head(data_between)
+
+# Add trial number per subject
+data_between <- data_between %>% group_by(pid) %>% mutate(trial = row_number()) %>% ungroup()
+
+head(data_between)
+summary(data_between)
+
+# remove trials where response = NA
+data_between_clean <- data_between %>% drop_na() 
+head(data_between_clean)
+
+# add condition indicating each combination of iv2 (GROUP) and iv1 (DAY_BETWEEN)
+data_between_clean <- data_between_clean %>% mutate(condition = (4*(iv1-1)) + iv2) 
+head(data_between_clean) 
+summary(data_between_clean)
+
+# create new pid and trial variables for aggregated data plot
+data_between_clean_single <- data_between_clean %>% mutate(oldtrial=trial,
+                                              oldpid=pid,
+                                              trial = 1:n(),
+                                              pid = 1)
+summary(data_between_clean_single)
+head(data_between_clean_single)
+```
+
+```{r func-make-plot-2iv}
+# limit y-axis hazard + only 4 levels for iv1 (periods between learning)
+plot_eha_2iv_lim_between <- function(df,subj){
+  library(patchwork)
+  cutoff <- df %>% pull(cens_time) %>% max(na.rm=T)
+  binsize <- df %>% pull(bin_width) %>% max(na.rm=T)
+  median_period <- extract_median(df)
+  n_iv1 <- nlevels(factor(df$iv1))
+  n_iv2 <- nlevels(factor(df$iv2))
+  n_conditions <- n_iv1*n_iv2
+  # set up tibble to plot vertical lines indicating S(t).50 for each condition
+  data_median <- c()
+  for(i in 1:n_conditions){
+    data_median <- append(data_median, c(median_period[i], median_period[i]))
+  }
+  data_medians <- tibble(period= data_median,
+                         survival = rep(c(.5, 0),n_conditions),
+                         condition = rep(1:n_conditions, each=2),
+                         train =  factor(rep(rep(1:n_iv2, each=2),n_iv1),levels=c(1:4),labels=c("naming", "tying", "naming+tying","no training")),
+                         day = factor(rep(1:n_iv1, each=2*n_iv2),levels=c(1:4),labels=str_c("period ",1:4)  )) # changes
+  
+p1 <-df %>% 
+  mutate(day = factor(iv1,levels=c(1:4),labels=str_c("period ",1:4)  )) %>% # changes 
+  mutate(train = factor(iv2,levels=c(1:4),labels=c("naming", "tying", "naming+tying","no training")  )) %>% 
+                           
+  ggplot(aes(x=period, color=train, group=train)) +
+  geom_line(aes(y=hazard)) +
+  geom_point(aes(y=hazard), size=1) + labs(color="Training condition") +
+  geom_linerange(aes(ymin=hazard-se_haz, ymax=hazard+se_haz), show.legend = F) +
+  scale_x_continuous(breaks = c(0,1:(cutoff/binsize)), labels=c(0,1:(cutoff/binsize)*binsize),
+                     limits = c(0,cutoff/binsize)) +
+  scale_y_continuous(limits = c(0,.3)) +
+  labs(x="", y="h(t)", title = paste("Subject ", subj)) +
+  theme(legend.background = element_rect(fill = "transparent"),
+        panel.grid = element_blank(),
+        legend.position = "top",
+        axis.text.x = element_text(angle=90)) +
+  facet_wrap(~day, nrow=1,ncol=5)
+
+p2 <-df %>%
+  mutate(day = factor(iv1,levels=c(1:4),labels=str_c("period ",1:4)  )) %>% 
+  mutate(train = factor(iv2,levels=c(1:4),labels=c("naming", "tying", "naming+tying", "no training")  )) %>% 
+  ggplot(aes(x=period, color=train, group=train)) +
+  geom_line(aes(y=survival), show.legend = F) +
+  geom_point(aes(y=survival), size=1, show.legend = F) +
+  
+  geom_linerange(aes(ymin=survival-se_surv, ymax=survival+se_surv), show.legend = F) +
+  # add medians
+  geom_path(aes(x=period, y=survival),
+            data = data_medians, 
+            linetype = 1, show.legend = F) +
+  scale_x_continuous(breaks = c(0,1:(cutoff/binsize)), labels=c(0,1:(cutoff/binsize)*binsize),
+                     limits=c(0,cutoff/binsize)) +
+  scale_y_continuous(limits = c(0,1)) +
+  labs(x="", y="S(t)") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) +
+  facet_wrap(~day, nrow=1,ncol=5)
+
+p3 <-df %>%
+  mutate(day = factor(iv1,levels=c(1:4),labels=str_c("period ",1:4)  )) %>% # changes 
+  mutate(train = factor(iv2,levels=c(1:4),labels=c("naming", "tying", "naming+tying","no training")  )) %>% 
+  ggplot(aes(x=period, color=train, group=train)) +
+  geom_line(aes(y=ca), show.legend = F) +
+  geom_point(aes(y=ca), size=1, show.legend = F) +
+  geom_linerange(aes(ymin=ca-se_ca, ymax=ca+se_ca), show.legend = F) +
+  scale_x_continuous(breaks = c(0,1:(cutoff/binsize)), labels=c(0,1:(cutoff/binsize)*binsize),
+                     limits=c(0,cutoff/binsize)) +
+  scale_y_continuous(limits = c(0,1)) +
+  labs(x="Time bin t's endpoint (ms)", y="ca(t)",
+       colour="Condition") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle=90)) +
+  facet_wrap(~day, nrow=1,ncol=5)
+
+p1/p2/p3
+}
+```
+
+
+
+```{r}
+data_nested_single_between <- data_between_clean_single %>% group_nest(pid)
+
+data_final_single_between <- data_nested_single_between %>% 
+                     mutate(censored  = map(data, censor, 1500, 75)) %>%  # user input: censoring time, bin width
+                     mutate(ptb_data  = map(censored, ptb)) %>%            # create person-trial-bin dataset
+                     mutate(lifetable = map(ptb_data, setup_lt_2iv)) %>%   # create life tables without ca for 2 IV's
+                     mutate(condacc   = map(censored, calc_ca)) %>%        # calculate ca
+                     mutate(lifetable_ca = map2(lifetable, condacc, join_lt_ca)) %>%  # create life tables with ca
+                     mutate(plot      = map2(.x = lifetable_ca, .y = pid, plot_eha_2iv_lim_between))  # create plots of info in life tables for 2 IV's
+```
+
+```{r}
+# view plot for subject 1
+pluck(data_final_single_between,8,1)
+```
+
+
+```{r}
+# save as png
+map2(paste0("figures/figure_aggregated_between", data_final_single_between$pid, ".png"), data_final_single_between$plot, ggsave, width = 12, height = 8, dpi = 600)
+```
+
+
+## Apply clustering algorithm to identify groups of subjects?
 
 
 
