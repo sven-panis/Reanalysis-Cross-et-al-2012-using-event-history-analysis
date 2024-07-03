@@ -25,11 +25,10 @@ summary(data_orig)
 test <- data_orig %>% group_by(pid, DAY, SESSION) %>% summarise(N = n())
 print.data.frame(test)
 
-# Missing 12 sessions (of 200 sessions): Note there are 160 trials in s2 of d5 of s6
+# Missing 11 sessions (of 200 sessions): 
 # s2 of d1 of s1
 # s2 of d2 of s3
 # s2 of d5 of s3
-# s2 of d1 of s6
 # s1 of d2 of s7
 # s2 of d1 of s14
 # s2 of d1 of s15
@@ -38,10 +37,6 @@ print.data.frame(test)
 # s2 of d2 of s17
 # s2 of d3 of s17
 # s2 of d5 of s17
-
-# check 160 trials in session 2 of day 5 of subject 6
-test2 <- data_orig %>% filter(pid==6 & DAY==5 & SESSION==2) %>% select(GROUP)
-print.data.frame(test2)
 
 # remove trials where response = NA (452 trials)
 data2 <- data_orig %>% drop_na() # 14668 trials left
@@ -321,7 +316,7 @@ Apply the functions using map and map2 to create the life tables and plots, for 
 
 ```{r apply-functions}
 data_final <- data_nested %>% 
-                     mutate(censored  = map(data, censor, 2000, 200)) %>%  # user input: censoring time, bin width
+                     mutate(censored  = map(data, censor, 1500, 75)) %>%  # user input: censoring time, bin width
                      mutate(ptb_data  = map(censored, ptb)) %>%            # create person-trial-bin dataset
                      mutate(lifetable = map(ptb_data, setup_lt_2iv)) %>%   # create life tables without ca for 2 IV's
                      mutate(condacc   = map(censored, calc_ca)) %>%        # calculate ca
@@ -342,8 +337,8 @@ pluck(data_final,5,20) %>% filter(condition==4)
 # pull full lifetable for subject 1 and condition 20
 pluck(data_final,7,1) %>% filter(condition==20)
 
-# view plot for subject 1
-pluck(data_final,8,1)
+# view plot for single subject 
+pluck(data_final,8,19) # subjects 3,4, 7,10, 16, 18 and 19 responded slower in one or more training conditions, on 1 or more days compared to others (median RT > 1500)
 ```
 
 ## Aggregated across subjects
