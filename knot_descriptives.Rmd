@@ -768,6 +768,23 @@ map2(paste0("figures/figure_aggregated_between", data_final_single_between$pid, 
 ```
 
 
+# check which subjects have at least 80% of their data in the range 600 - 1500 (12 bins of 75 ms)
+
+```{r}
+summary(data_clean)
+head(data_clean)
+
+data_test <- data_clean %>% mutate(range = ifelse(RT < 600 | RT > 1500, 0,1))
+head(data_test)
+summary(data_test)
+
+data_test %>% group_by(pid) %>% summarise(range_perc = mean(range))
+
+# subjects 2, 3, 7,10, 16,17 and 19 have less than 80 percent of their RT in this range
+```
+
+
+
 ## Apply clustering algorithm to identify groups of subjects?
 
 
