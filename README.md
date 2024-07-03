@@ -42,5 +42,6 @@ Calculates descriptive statistics for the behavioral data of Cross et. al (2012)
 
 * knot_inferential.Rmd
 
-Fits the Bayesian model specified in the preregistration file. 
+In knot_inferential.Rmd we fit Bayesian hazard models to the (person-trial-bin) data set, and calculate the effects of interest, following our (pre)registration on the OSF.
+
 
