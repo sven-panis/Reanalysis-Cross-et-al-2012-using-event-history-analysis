@@ -394,7 +394,7 @@ p1 <-df %>%
   geom_linerange(aes(ymin=hazard-se_haz, ymax=hazard+se_haz), show.legend = F) +
   scale_x_continuous(breaks = c(0,1:(cutoff/binsize)), labels=c(0,1:(cutoff/binsize)*binsize),
                      limits = c(0,cutoff/binsize)) +
-  scale_y_continuous(limits = c(0,.3)) +
+  scale_y_continuous(limits = c(0,.3)) + # changes
   labs(x="", y="h(t)", title = paste("Subject ", subj)) +
   theme(legend.background = element_rect(fill = "transparent"),
         panel.grid = element_blank(),
@@ -708,7 +708,7 @@ p1 <-df %>%
   facet_wrap(~day, nrow=1,ncol=5)
 
 p2 <-df %>%
-  mutate(day = factor(iv1,levels=c(1:4),labels=str_c("period ",1:4)  )) %>% 
+  mutate(day = factor(iv1,levels=c(1:4),labels=str_c("period ",1:4)  )) %>% # changes
   mutate(train = factor(iv2,levels=c(1:4),labels=c("naming", "tying", "naming+tying", "no training")  )) %>% 
   ggplot(aes(x=period, color=train, group=train)) +
   geom_line(aes(y=survival), show.legend = F) +
