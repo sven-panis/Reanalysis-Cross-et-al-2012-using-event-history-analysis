@@ -338,6 +338,19 @@ pluck(data_final,7,1) %>% filter(condition==20)
 pluck(data_final,8,3) # subjects 3,4, 7,10, 16, 18 and 19 responded slower in one or more training conditions, on 1 or more days compared to others (median RT > 1500)
 ```
 
+Extract and save person-trial-bin (ptb) data set for modeling hazard.
+
+```{r file-hazard-modeling}
+input_modeling_hazard_knot <- data_final %>% 
+                        select(pid, ptb_data) %>%  unnest(ptb_data) %>%
+                        select(pid,trial,iv1,iv2,condition,period,event)
+summary(input_modeling_hazard_knot)
+
+
+# save in folder data
+write_csv(input_modeling_hazard_knot, file="data/inputfile_hazard_modeling_knot.csv")
+```
+
 ## Aggregated across subjects
 
 Make 1 plot for all data.
