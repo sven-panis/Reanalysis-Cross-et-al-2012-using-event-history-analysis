@@ -37,41 +37,75 @@ detectCores()
 #devtools::session_info("rstan")
 ```
 
-Prepare data (TODO...)
+Prepare data
 
 ```{r}
+# subjects 2, 3, 7,10, 16,17 and 19 have less than 80 percent of their RT in  range 600-1500
+
 # read data
-data_sim_knot <- read_csv("data/inputfile_hazard_modeling_sim_knot.csv")
-head(data_sim_knot)
+data_knot <- read_csv("data/inputfile_hazard_modeling_knot.csv")
+head(data_knot)
 
 # change column names
-names(data_sim_knot) <- c("pid","trial","day","training","condition","period","event")
-summary(data_sim_knot) # 30 pid, 800 trials per pid, 5 days, 4 training, 20 conditions, 15 periods: 268,309 rows
+names(data_knot) <- c("pid","trial","day","training","condition","period","event")
+summary(data_knot) # 20 pid, max 793 trials per pid, 5 days, 4 training, 20 conditions, 20 periods: 229,468 rows
 
+# period 1: (0-75)
+# period 2: (75-150)
+# period 4: (225-300)
+# period 8: (525-600)
+# period 9: (600-675)
+# period 10: (675-750)
+# period 11: (750-825)
+# period 12: (825-900)
+
+
+# period 16: (1125-1200)
+# period 20: (1425-1500)
+
+# select period 9 - 20 : 12 periods of 75 ms
 # center continous predictors
-data_sim_knot <- data_sim_knot %>% 
+data_knot <- data_knot %>% 
   mutate(day_c = day - 5,  # center on day 5
-         period_11 = period - 11) # center within-trial TIME on bin (1000,1100]
+         period_12 = period - 12) # center within-trial TIME on bin (1000,1100]
 
-print(data_sim_knot,n=30)
+print(data_knot,n=30)
 
 # delete early bins with few responses
-data_sim_knot <- data_sim_knot %>% filter(period > 7) 
+data_knot <- data_knot %>% filter(period > 8) # 111507 rows
+
+
+# create factor training
+data_knot <- data_knot %>% 
+  mutate(training = factor(training, levels=c(1:4),labels=c("Na","Ty","NaTy","None")),
+         training = fct_relevel(training,c("None","Na","Ty","NaTy")))
+summary(data_knot)
+data_knot$training
 
 # create dummies for levels of training
-data_sim_knot <- data_sim_knot %>% 
-  mutate(Na = ifelse(training==2,1,0),
-         Ty = ifelse(training==3,1,0),
-         NaTy = ifelse(training==4,1,0))
+#data_sim_knot <- data_sim_knot %>% 
+#  mutate(Na = ifelse(training==2,1,0),
+#         Ty = ifelse(training==3,1,0),
+#         NaTy = ifelse(training==4,1,0))
 
-summary(data_sim_knot) # 30 pid, 800 trials per pid, 5 days, 4 training, 20 conditions, 8 periods: 100,624 rows
+summary(data_knot) # 20 pid, max 793 trials per pid, 5 days, 4 training, 20 conditions, 12 periods: 111,507 rows
 
 # remove unnecessary columns
-data_sim_knot <- data_sim_knot %>% select(-c(trial, day, training, condition, period))
-head(data_sim_knot)
+data_knot <- data_knot %>% select(-c(trial, day, condition, period))
+head(data_knot)
 
 # remove some subjects
-data_sim_knot <- data_sim_knot %>% filter(pid < 8) # 22412 rows left
+data_knot <- data_knot %>% filter(pid != 2) %>%
+                           filter(pid != 3) %>%
+                           filter(pid != 7) %>%
+                           filter(pid != 10) %>%
+                           filter(pid != 16) %>%
+                           filter(pid != 17) %>%
+                           filter(pid != 19)
+
+unique(data_knot$pid)
+# c(2, 3, 7,10, 16,17, 19)) # 70026 rows left
+summary(data_knot)
 ```
 
 Fit a Bayesian hazard model, to test how the effect of three types of training (naming, tying, naming+tying) play out concurrently on the within-trial and across-day time scales.
@@ -85,126 +119,36 @@ priors <- c(
 )
 ```
 
-```{r}
-plan(multicore)
-
-model_sim_knot2 <-
-   brm(data = data_sim_knot,
-       family = binomial(link="cloglog"),
-       event | trials(1) ~ 0 + Intercept + period_11 + I(period_11^2) + #I(period_11^3) + 
-                              # interactions between training and time
-                              Na + Na*period_11 + Na*I(period_11^2) + #Na*I(period_11^3) + 
-                              Ty + Ty*period_11 + Ty*I(period_11^2) + #Ty*I(period_11^3) + 
-                              NaTy + NaTy*period_11 + NaTy*I(period_11^2) + #NaTy*I(period_11^3) + 
-                              # quadratic effect of day, interacting with linear and quadratic time
-                              day_c + day_c*period_11 + day_c*I(period_11^2) + 
-                              I(day_c^2) + I(day_c^2)*period_11 + I(day_c^2)*I(period_11^2) + 
-                              # interactions between training, time, and day
-                              Na*day_c      + Na*day_c*period_11      + Na*day_c*I(period_11^2) + 
-                              Na*I(day_c^2) + Na*I(day_c^2)*period_11 + Na*I(day_c^2)*I(period_11^2) + 
-                              Ty*day_c      + Ty*day_c*period_11      + Ty*day_c*I(period_11^2) + 
-                              Ty*I(day_c^2) + Ty*I(day_c^2)*period_11 + Ty*I(day_c^2)*I(period_11^2) + 
-                              NaTy*day_c    + NaTy*day_c*period_11    + NaTy*day_c*I(period_11^2) + 
-                              NaTy*I(day_c^2) + NaTy*I(day_c^2)*period_11 + NaTy*I(day_c^2)*I(period_11^2) +  
-    
-                              (1 + period_11  + I(period_11^2) +  #I(period_11^3) + 
-                              Na + Na*period_11 + Na*I(period_11^2) + #Na*I(period_11^3) + 
-                              Ty + Ty*period_11 + Ty*I(period_11^2) + #Ty*I(period_11^3) + 
-                              NaTy + NaTy*period_11 + NaTy*I(period_11^2) + #NaTy*I(period_11^3)  
-                              
-                              day_c + day_c*period_11 + day_c*I(period_11^2) + 
-                              I(day_c^2) + I(day_c^2)*period_11 + I(day_c^2)*I(period_11^2) + 
-                              Na*day_c + Na*day_c*period_11 + Na*day_c*I(period_11^2) + 
-                              Na*I(day_c^2) + Na*I(day_c^2)*period_11 + Na*I(day_c^2)*I(period_11^2) + 
-                              Ty*day_c + Ty*day_c*period_11 + Ty*day_c*I(period_11^2) + 
-                              Ty*I(day_c^2) + Ty*I(day_c^2)*period_11 + Ty*I(day_c^2)*I(period_11^2) + 
-                              NaTy*day_c + NaTy*day_c*period_11 + NaTy*day_c*I(period_11^2) + 
-                              NaTy*I(day_c^2) + NaTy*I(day_c^2)*period_11 + NaTy*I(day_c^2)*I(period_11^2) | pid),
-       prior = priors,
-       chains = 1, cores = 8, iter = 2000, warmup = 1000,
-       control = list(adapt_delta = 0.999, step_size = 0.04, max_treedepth = 12),
-       seed = 12, init = "0",
-       file = "models/model_sim_knot2")
-```
-
-```{r}
-model_sim_knot <- readRDS("models/model_sim_knot.rds")
-summary(model_sim_knot)
-effects_knot <- get_variables(model_sim_knot) 
-fixed_effects_knot <- fixef(model_sim_knot)
-random_effects_knot <- ranef(model_sim_knot)
-```
-
-model_sim_knot (no cubic, 7 subjects, 1000 iter, 500 warmup, about 4 hours): no warnings, but some Rhat = 1.01, 1Rhat = 1.02,1 Rhat = 1.03
-
-# Test alternative model specification:
-
-```{r}
-# create factor of training condition with no training as reference level
-# read data
-data_sim_knot <- read_csv("data/inputfile_hazard_modeling_sim_knot.csv")
-head(data_sim_knot)
-
-# change column names
-names(data_sim_knot) <- c("pid","trial","day","training","condition","period","event")
-summary(data_sim_knot) # 30 pid, 800 trials per pid, 5 days, 4 training, 20 conditions, 15 periods: 268,309 rows
-
-# center continous predictors
-data_sim_knot <- data_sim_knot %>% 
-  mutate(day_c = day - 5,  # center on day 5
-         period_11 = period - 11) # center TIME on bin (1000,1100]
-
-print(data_sim_knot,n=30)
-
-# delete early bins with few responses
-data_sim_knot <- data_sim_knot %>% filter(period > 7) 
-summary(data_sim_knot) # 30 pid, 800 trials per pid, 5 days, 4 training, 20 conditions, 8 periods: 100,624 rows
-
-# create factor training
-data_sim_knot <- data_sim_knot %>% 
-  mutate(train_factor = factor(training, levels=c(1:4),labels=c("notr","na","ty","naty")))
-summary(data_sim_knot)
-data_sim_knot$train_factor
-
-# remove unnecessary columns
-data_sim_knot <- data_sim_knot %>% select(-c(trial, day, training, condition, period))
-head(data_sim_knot)
-
-# remove some subjects
-data_sim_knot <- data_sim_knot %>% filter(pid < 8) # 22412 rows left
-summary(data_sim_knot)
-```
-
 Fit model with alternative specification
 
 ```{r}
 plan(multicore)
 
-model_sim_knot_alt <-
-   brm(data = data_sim_knot,
+model_knot <-
+   brm(data = data_knot,
        family = binomial(link="cloglog"),
        event | trials(1) ~ 0 + Intercept + 
-                           train_factor*period_11*day_c +
-                           train_factor*I(period_11^2)*day_c +
-                           train_factor*period_11*I(day_c^2) +
-                           train_factor*I(period_11^2)*I(day_c^2) +
-                           (1 + train_factor*period_11*day_c +
-                           train_factor*I(period_11^2)*day_c +
-                           train_factor*period_11*I(day_c^2) +
-                           train_factor*I(period_11^2)*I(day_c^2)  | pid),
+                           training*period_12*day_c +
+                           training*I(period_12^2)*day_c +
+                           training*period_12*I(day_c^2) +
+                           training*I(period_12^2)*I(day_c^2) +
+                           (1 + training*period_12*day_c +
+                           training*I(period_12^2)*day_c +
+                           training*period_12*I(day_c^2) +
+                           training*I(period_12^2)*I(day_c^2)  | pid),
        prior = priors,
-       chains = 1, cores = 8, iter = 1000, warmup = 500,
+       chains = 4, cores = 8, iter = 3000, warmup = 1000,
        control = list(adapt_delta = 0.999, step_size = 0.04, max_treedepth = 12),
        seed = 12, init = "0",
-       file = "models/model_sim_knot_alt")
+       file = "models/model_knot")
 ```
 
 ```{r}
-model_sim_knot_alt <- readRDS("models/model_sim_knot_alt.rds")
-summary(model_sim_knot_alt)
-effects_alt <- get_variables(model_sim_knot_alt) 
-fixed_effects_alt <- fixef(model_sim_knot_alt)
-random_effects_alt <- ranef(model_sim_knot_alt)
+model_knot <- readRDS("models/model_knot.rds")
+summary(model_knot)
+effects <- get_variables(model_knot) 
+fixed_effects <- fixef(model_knot)
+random_effects <- ranef(model_knot)
 ```
 
 # Extract posterior distributions, and visualize the effect of training type (vs. no training) for each combination of within-trial time period and day.
@@ -212,10 +156,10 @@ random_effects_alt <- ranef(model_sim_knot_alt)
 Plot using stat_lineribbon().
 
 ```{r}
-post <-as_draws_df(model_sim_knot) %>% # 500 x 956
+post <-as_draws_df(model_knot) %>% # 500 x 956
    select(starts_with("b_")) %>%       # 500 x 36
-   expand_grid(period_11 = -3:4) %>%   # 4000 x 37
-   mutate(period_11sq = period_11^2)   # 4000 x 38
+   expand_grid(period_12 = -3:8) %>%   # 4000 x 37
+   mutate(period_12sq = period_12^2)   # 4000 x 38
 
 p1 <- post %>% 
   mutate(postdistr = b_Na + period_11 * `b_period_11:Na` + period_11sq * `b_Iperiod_11E2:Na`) %>%
