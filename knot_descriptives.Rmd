@@ -313,7 +313,7 @@ Apply the functions using map and map2 to create the life tables and plots, for 
 
 ```{r apply-functions}
 data_final <- data_nested %>% 
-                     mutate(censored  = map(data, censor, 1500, 75)) %>%  # user input: censoring time, bin width
+                     mutate(censored  = map(data, censor, 1600, 100)) %>%  # user input: censoring time, bin width
                      mutate(ptb_data  = map(censored, ptb)) %>%            # create person-trial-bin dataset
                      mutate(lifetable = map(ptb_data, setup_lt_2iv)) %>%   # create life tables without ca for 2 IV's
                      mutate(condacc   = map(censored, calc_ca)) %>%        # calculate ca
@@ -335,7 +335,7 @@ pluck(data_final,5,20) %>% filter(condition==4)
 pluck(data_final,7,1) %>% filter(condition==20)
 
 # view plot for single subject 
-pluck(data_final,8,3) # subjects 3,4, 7,10, 16, 18 and 19 responded slower in one or more training conditions, on 1 or more days compared to others (median RT > 1500)
+pluck(data_final,8,2) # subjects 3,4, 7,10, 16, 18 and 19 responded slower in one or more training conditions, on 1 or more days compared to others (median RT > 1500)
 ```
 
 Extract and save person-trial-bin (ptb) data set for modeling hazard.
@@ -348,7 +348,7 @@ summary(input_modeling_hazard_knot)
 
 
 # save in folder data
-write_csv(input_modeling_hazard_knot, file="data/inputfile_hazard_modeling_knot.csv")
+write_csv(input_modeling_hazard_knot, file="data/inputfile_hazard_modeling_knot_1600_100.csv")
 ```
 
 ## Aggregated across subjects
@@ -450,7 +450,7 @@ p1/p2/p3
 data_nested_single <- data_single %>% group_nest(pid)
 
 data_final_single <- data_nested_single %>% 
-                     mutate(censored  = map(data, censor, 1500, 75)) %>%  # user input: censoring time, bin width
+                     mutate(censored  = map(data, censor, 1600, 100)) %>%  # user input: censoring time, bin width
                      mutate(ptb_data  = map(censored, ptb)) %>%            # create person-trial-bin dataset
                      mutate(lifetable = map(ptb_data, setup_lt_2iv)) %>%   # create life tables without ca for 2 IV's
                      mutate(condacc   = map(censored, calc_ca)) %>%        # calculate ca
@@ -704,25 +704,25 @@ map2(paste0("figures/figure_aggregated_between", data_final_single_between$pid, 
 ```
 
 
-# check which subjects have at least 80% of their data in the range 600 - 1500 (12 bins of 75 ms)
+# check which subjects have at least 80% of their data in the range 700 - 1600 (9 bins of 100 ms)
 
 ```{r}
 summary(data)
 head(data)
 
-data_test <- data %>% mutate(range = ifelse(RT < 600 | RT > 1500, 0,1))
+data_test <- data %>% mutate(range = ifelse(RT < 700 | RT > 1600, 0,1))
 head(data_test)
 summary(data_test)
 
 data_test %>% group_by(pid) %>% summarise(range_perc = mean(range))
 
-# subjects 2, 3, 7,10, 16,17 and 19 have less than 80 percent of their RT in this range
+# subjects 3, 7,10, 14, 16, and 19 have less than 80 percent of their RT in this range
 
 # visualize distribution per subject
 data %>% ggplot(aes(x=RT)) +
   geom_histogram(binwidth=20) +
-  geom_vline(xintercept=600) +
-  geom_vline(xintercept=1500) +
+  geom_vline(xintercept=700) +
+  geom_vline(xintercept=1600) +
   facet_wrap(~pid)
 ```
 
